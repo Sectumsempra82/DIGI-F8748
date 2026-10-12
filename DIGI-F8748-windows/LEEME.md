@@ -134,7 +134,12 @@ También funciona el script `.sh` dentro de WSL (Ubuntu en Windows).
 | `disarm` | Cierra el acceso de diagnóstico | Sí (lo cierra) |
 | `recover` | Todo el proceso completo, de principio a fin | Sí (ídem) |
 
-Opciones: `--host` (IP del router), `--web-user` / `--web-pass` (tu login
+En Windows, el programa prueba la puerta de enlace IPv4 predeterminada y usa
+su dirección si la interfaz web responde. Si no puede detectarla o alcanzarla,
+te pide la dirección del router. Puedes indicar `--host` para elegirla
+directamente, por ejemplo `--host 10.20.30.1`.
+
+Opciones: `--host` (IP o nombre del router), `--web-user` / `--web-pass` (tu login
 normal), `--router-mac` / `--client-mac`, `--out` (carpeta de salida),
 `--keep-ssh` (no recomendado).
 

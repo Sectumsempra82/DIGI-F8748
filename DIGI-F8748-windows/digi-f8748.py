@@ -822,12 +822,71 @@ def router_info(host: str, timeout: float = 8.0) -> dict:
 # CLI steps
 # --------------------------------------------------------------------------
 def common_args(p: argparse.ArgumentParser) -> None:
-    p.add_argument("--host", default="192.168.1.1", help="router IP (default 192.168.1.1)")
+    p.add_argument("--host", default="", help="router IP or hostname (overrides gateway detection)")
     p.add_argument("--web-user", default=DEFAULT_WEB_USER, help="normal web login user")
     p.add_argument("--web-pass", default=DEFAULT_WEB_PASS, help="normal web login password")
     p.add_argument("--client-rand", type=int, default=0, help="webFac client rand (default 0)")
     p.add_argument("-y", "--yes", action="store_true", dest="yes",
                    help="no pedir confirmaciones de autorización")
+
+
+def detect_default_gateway() -> str:
+    """Return the active Windows IPv4 default gateway, if one is available."""
+    if os.name != "nt":
+        return ""
+    command = (
+        "$r = Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' "
+        "| Where-Object { $_.NextHop -and $_.NextHop -ne '0.0.0.0' } "
+        "| Sort-Object RouteMetric, InterfaceMetric "
+        "| Select-Object -First 1 -ExpandProperty NextHop; if ($r) { $r }"
+    )
+    try:
+        result = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command],
+            capture_output=True, text=True, timeout=5, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    if result.returncode != 0:
+        return ""
+    gateway = result.stdout.strip().splitlines()
+    return gateway[0].strip() if gateway else ""
+
+
+def router_web_reachable(host: str) -> bool:
+    try:
+        response = requests.get(f"http://{host}/", timeout=3, allow_redirects=False,
+                                headers={"User-Agent": "Mozilla/5.0"})
+        response.close()
+        return True
+    except requests.exceptions.RequestException:
+        return False
+
+
+def resolve_router_host(host: str = "") -> str:
+    if host:
+        return validate_host(host)
+
+    gateway = detect_default_gateway()
+    if gateway and not HOST_RE.fullmatch(gateway):
+        gateway = ""
+    if gateway and router_web_reachable(gateway):
+        log(f"[*] Router detected at default gateway: {gateway}")
+        return gateway
+    if gateway:
+        log(f"[!] No responde la interfaz web en la puerta de enlace {gateway}.")
+    else:
+        log("[!] No se detecto una puerta de enlace IPv4 predeterminada.")
+    if not sys.stdin.isatty():
+        raise RuntimeError("indica la direccion del router con --host <direccion>")
+    prompt = f"Direccion IP o nombre del router [{gateway or 'manual'}]: "
+    try:
+        selected = input(prompt).strip()
+    except EOFError as exc:
+        raise RuntimeError("no se pudo leer la direccion; indica --host <direccion>") from exc
+    if not selected:
+        raise RuntimeError("falta la direccion del router; indica --host <direccion>")
+    return validate_host(selected)
 
 
 def resolve_macs(args) -> tuple[bytes, bytes]:
@@ -1133,9 +1192,10 @@ def main(argv=None) -> int:
     p.set_defaults(fn=cmd_recover)
 
     args = ap.parse_args(argv)
-    if hasattr(args, "host"):
-        validate_host(args.host)
     try:
+        if hasattr(args, "host"):
+            args.host = resolve_router_host(args.host)
+            log(f"[*] Router: {args.host}")
         args.fn(args)
     except KeyboardInterrupt:
         print("\n[!] interrupted — run 'disarm' to close factory SSH if it was armed")
